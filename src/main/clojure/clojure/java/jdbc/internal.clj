@@ -335,11 +335,17 @@
   (with-open [^PreparedStatement stmt (prepare-statement* (connection*) sql :return-keys true)]
     (set-parameters stmt param-group)
     (transaction* (fn [] (let [counts (.executeUpdate stmt)]
-                           (try
-                             (first (resultset-seq* (.getGeneratedKeys stmt)))
-                             (catch Exception _
-                               ;; assume generated keys is unsupported and return counts instead: 
-                               counts)))))))
+                          (try
+                            (let [rs (.getGeneratedKeys stmt)
+                                  result (first (resultset-seq* rs))]
+                              ;; close is required for sqlite3
+                              ;; transaction support
+                              ;; see http://www.zentus.com/sqlitejdbc/usage.html
+                              (.close rs)
+                              result)
+                            (catch Exception e
+                              ;; assume generated keys is unsupported and return counts instead: 
+                              counts)))))))
 
 (defn do-prepared*
   "Executes an (optionally parameterized) SQL prepared statement on the
@@ -349,11 +355,11 @@
   [sql & param-groups]
   (with-open [^PreparedStatement stmt (prepare-statement* (connection*) sql)]
     (if (empty? param-groups)
-      (.addBatch stmt)
-      (doseq [param-group param-groups]
-        (set-parameters stmt param-group)
-        (.addBatch stmt)))
-    (transaction* (fn [] (seq (.executeBatch stmt))))))
+      (transaction* (fn [] [(.executeUpdate stmt)]))
+      (do (doseq [param-group param-groups]
+            (set-parameters stmt param-group)
+            (.addBatch stmt))
+          (transaction* (fn [] (seq (.executeBatch stmt))))))))
 
 (defn with-query-results*
   "Executes a query, then evaluates func passing in a seq of the results as

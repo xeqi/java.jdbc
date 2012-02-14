@@ -52,6 +52,9 @@
                   :user "clojure_test"
                   :password "clojure_test"})
 
+(def sqlite3-db {:subprotocol "sqlite"
+                 :subname "clojure_test_sqlite3"})
+
 ;; To test against the stringified DB connection settings:
 (def mysql-str-db
   "mysql://clojure_test:clojure_test@localhost:3306/clojure_test")
@@ -174,7 +177,9 @@
           "postgresql" (is (= 2 (count r)))
           "mysql" (is (= '({:generated_key 1} {:generated_key 2}) r))
           "hsqldb" (is (= '(1 1) r))
-          "derby" (is (= '({:1 nil} {:1 nil}) r))))
+          "derby" (is (= '({:1 nil} {:1 nil}) r))
+          "sqlite" (is (= (list {(keyword "last_insert_rowid()") 1}
+                                {(keyword "last_insert_rowid()") 2}) r))))
       (is (= 2 (sql/with-query-results res ["SELECT * FROM fruit"] (count res))))
       (is (= "Pomegranate" (sql/with-query-results res ["SELECT * FROM fruit WHERE cost = ?" 585] (:name (first res))))))))
 
@@ -242,12 +247,14 @@
       (create-test-table :fruit db)
       (try
         (sql/transaction
-          (sql/insert-values
-            :fruit
-            [:name :appearance]
-            ["Grape" "yummy"]
-            ["Pear" "bruised"]
-            ["Apple" "strange" "whoops"]))
+         (sql/insert-values
+          :fruit
+          [:name :appearance]
+          ["Grape" "yummy"]
+          ["Pear" "bruised"]
+          ["Apple" "strange" "whoops"])
+         ;; sqlite3 does not error on a group that is too large
+         (throw (java.sql.SQLException.)))
         (catch java.sql.SQLException _
           (is (= 0 (sql/with-query-results res ["SELECT * FROM fruit"] (count res))))))
       (is (= 0 (sql/with-query-results res ["SELECT * FROM fruit"] (count res)))))))
@@ -270,6 +277,20 @@
           (is (= 3 (sql/with-query-results res ["SELECT * FROM fruit"] (count res)))))
         (catch java.sql.SQLException _
           (is (= 0 (sql/with-query-results res ["SELECT * FROM fruit"] (count res))))))
+      (is (= 0 (sql/with-query-results res ["SELECT * FROM fruit"] (count res)))))))
+
+(deftest test-transactions-with-possible-generated-keys-result-set
+  (doseq [db (test-specs)]
+    (sql/with-connection db
+      (create-test-table :fruit db)
+      (try
+        (sql/transaction
+         (sql/set-rollback-only)
+         (sql/insert-values
+          :fruit
+          [:name :appearance]
+          ["Grape" "yummy"])
+         (is (= 1 (sql/with-query-results res ["SELECT * FROM fruit"] (count res))))))
       (is (= 0 (sql/with-query-results res ["SELECT * FROM fruit"] (count res)))))))
 
 (deftest test-metadata
